@@ -3,9 +3,44 @@ version = "0.1.0"
 gleam = ">= 1.19.1"
 target = "erlang"
 licences = ["MIT", "Apache-2.0"]
-description = "Odin native implemented functions for Gleam on Erlang"
+description = "Typed Odin native functions for Gleam on Erlang, with code generation and source builds"
 
 [dependencies]
 gleam_stdlib = ">= 0.44.0 and < 2.0.0"
 
 [dev_dependencies]
+
+[repository]
+type = "github"
+user = "gdcrisp"
+repo = "glodin"
+
+[[documentation.pages]]
+title = "Ownership and lifecycle"
+path = "ownership.html"
+source = "priv/docs/ownership.md"
+
+[[documentation.pages]]
+title = "CLI and native dependencies"
+path = "workflow.html"
+source = "priv/docs/workflow.md"
+
+[[documentation.pages]]
+title = "Capabilities and release gates"
+path = "parity.html"
+source = "priv/docs/parity.md"
+
+[[documentation.pages]]
+title = "Rustler API mapping"
+path = "rustler-api.html"
+source = "priv/docs/rustler-api.md"
+
+[[documentation.pages]]
+title = "Changelog"
+path = "changelog.html"
+source = "priv/docs/changelog.md"
+
+[[documentation.pages]]
+title = "Release checklist"
+path = "releasing.html"
+source = "priv/docs/releasing.md"

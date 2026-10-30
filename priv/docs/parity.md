@@ -10,8 +10,8 @@ separate column; a local test does not certify every operation or platform.
 | Typed NIF exports and automatic conversion | `@(glodin_nif)`, parser and generated adapters | `examples/math`; incremental/scaffold integration test |
 | Export renaming and registration | `glodin_name`, generated C `ERL_NIF_INIT` | renamed export and stale-module tests |
 | Normal / dirty CPU / dirty I/O schedulers | `glodin_schedule`, `Scheduler` | conformance `renamed`, `dirty_io` |
-| Project scaffolding and compiler integration | `glodin.main`, bundled escripts, pinned Gleam patch | ordinary `gleam run/build/test`; dependency hook tests |
-| Root/dependency prebuild hooks | `erlang.build_hooks` argv arrays | root/dependency cache, environment, literal-argument, failure tests |
+| Project scaffolding and compiler integration | `glodin.main`, bundled escripts, stock Gleam wrapper | wrapper `run/build/test`; native dependency tests |
+| Root/dependency native builds | explicit wrapper and dependency traversal | root/dependency cache, literal-argument and failure tests |
 | Load, upgrade, unload, private data | generated lifecycle adapters; `private_data` | explicit upgrade migrates private state and automatically registers resources; old code is purged |
 | Load data and dynamic load data | `load_data`, `load_data_fun` | static load data and Erlang load-data function tested |
 | Terms, atoms, PIDs, references, equality and comparison | `Term`, `Atom`, `Pid`, `Reference`, `term_type`, `compare`, `identical`, `whereis_pid`, `is_process_alive` | UTF-8 atoms, process lookup, references, identity and ordering tested |
@@ -40,12 +40,12 @@ separate column; a local test does not certify every operation or platform.
 | Low-level NIF API access | OTP-header-generated lookup with exact caller-supplied C signatures | `sys.api("enif_is_number", ...)` tested; no claim that every OTP API is individually tested |
 | Multiple native modules, compiler flags/paths, targets and collections | module JSON, `ODIN`/`CC`, compiler arrays, `target`, `collections`, `watch`, `otp_include` | multiple modules, existing TOML preservation, normal paths and imported aliases tested; cross-compilation and collection combinations need broader coverage |
 | Explicitly supplied libraries | `skip_compilation`, `artifact` | fresh cache with missing Odin/CC still runs successfully |
-| Native source packaging and compiled shipments | patched `extra_files`/`exclude_files`; standard shipment export | source archive inclusion/exclusion and `.so` shipment checks |
+| Native source packaging and compiled shipments | standard `priv/` source inclusion, sanitized staging; shipment export | source archive inclusion/exclusion and `.so` shipment checks |
 
 ## Release gates
 
 - [x] Scaffold a native addition function and call it from Gleam.
-- [x] Edit only Odin and observe updated behavior through ordinary `gleam test`.
+- [x] Edit only Odin and observe updated behavior through the wrapper test command.
 - [x] Confirm unchanged builds reuse artifacts and preserve generated file mtimes.
 - [x] Recover from an invalid native interface; reject unsupported types at their source location.
 - [x] Track compiler-reported imported Odin dependencies.
@@ -53,11 +53,13 @@ separate column; a local test does not certify every operation or platform.
 - [x] Retain a resource across two native library versions and purge the old code.
 - [x] Migrate private state through an explicit upgrade callback.
 - [x] Exercise monitor cancellation, actual I/O readiness/stop, dynamic resource calls and yielding.
-- [x] Include native sources/hooks in a Hex archive and native libraries in a production shipment.
-- [ ] Complete the remaining behavioral coverage identified above.
+- [x] Include native sources in a Hex archive and native libraries in a production shipment.
 - [ ] Run and pass the complete macOS/Linux × arm64/x64 × OTP 27/28/29 CI matrix.
-- [ ] Finish operation-by-operation certification beyond the [source API mapping](rustler-api.md) before claiming full parity.
-- [ ] Obtain an accepted upstream build integration, or explicitly release with the pinned compiler requirement.
+- [x] Support stock Gleam through the explicit wrapper; no compiler fork is required.
+
+Full operation-by-operation Rustler certification, custom worker pools, alternate
+wire formats, and certified cross-compilation are future work, not 0.1.0 claims.
+The complete platform matrix must pass before tagging 0.1.0.
 
 ## Deliberate substitutions and exclusions
 

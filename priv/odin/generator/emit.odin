@@ -22,13 +22,13 @@ emit :: proc(s: ^State, interface: ^codegen.Interface) {
 	gleam := codegen.emit_gleam(interface)
 	erlang := codegen.emit_erlang(interface)
 	c := codegen.emit_c(interface)
-	gleam_path := join({s.root, "src", fmt.tprintf("%s.gleam", s.gleam_module)})
 	cache := join({s.root, ".glodin", filepath.base(s.native)})
-	os.make_directory(filepath.dir(gleam_path))
 	os.make_directory(join({s.root, ".glodin"}))
 	os.make_directory(cache)
 	write_if_changed(join({s.native, "glodin_generated.odin"}), odin)
-	write_if_changed(gleam_path, gleam)
+	// The driver formats this intermediate file before publishing declarations,
+	// so unchanged public source files retain their mtimes on repeated builds.
+	write_if_changed(join({cache, "bindings.gleam"}), gleam)
 	write_if_changed(join({cache, "loader.erl"}), erlang)
 	write_if_changed(join({cache, "entry.c"}), c)
 }

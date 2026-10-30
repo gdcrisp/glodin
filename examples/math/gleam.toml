@@ -4,8 +4,3 @@ target = "erlang"
 
 [dependencies]
 glodin = { path = "../.." }
-
-[erlang]
-build_hooks = [["escript", "glodin_build.escript", "build", "--hook"]]
-extra_files = ["native", "glodin_build.escript"]
-exclude_files = ["priv/native"]

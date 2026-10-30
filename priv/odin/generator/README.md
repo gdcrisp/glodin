@@ -1,7 +1,7 @@
 # Glodin code generation
 
-Glodin's generator is an Odin program bundled with the library. The build hook
-compiles it when its sources change; `gleam run -m glodin -- generate` runs it
+Glodin's generator is an Odin program bundled with the library. The wrapper
+compiles it when its sources change; `escript glodin_build.escript generate` runs it
 without compiling the NIF. It has no third-party codegen dependency.
 
 The pipeline has three steps:
@@ -15,6 +15,8 @@ The pipeline has three steps:
 3. The `codegen` package renders Gleam bindings, Odin wrappers, the Erlang loader,
    and C registration independently. `emit.odin` writes changed files after all
    outputs have been rendered. Validation failures leave existing output intact.
+   The driver formats the cached Gleam bindings before publishing them to `src/`,
+   preserving public source mtimes when the interface is unchanged.
 
 `codegen/model.odin` is the contract between resolution and rendering. It models
 functions, parameters, type declarations, constructors, imports, resource types,

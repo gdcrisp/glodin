@@ -7,7 +7,7 @@ The downloaded source archive used for this review has SHA-256
 
 This maps public operation groups to the implementation and its behavioral
 tests. It is a source review, not a claim of exhaustive operation/platform
-certification. See [the release gates](parity.md).
+certification. See [the release gates](parity.html).
 
 | Rustler source / public operations | Glodin counterpart | Verification |
 | --- | --- | --- |
@@ -48,7 +48,7 @@ certification. See [the release gates](parity.md).
 | `spawn`, thread spawning, scheduler-thread query | `spawn`, `Job`, `job_send`, `is_scheduler_thread`; custom pools can use Odin threading and explicit ownership APIs | worker delivery and thread classification; arbitrary external pools are not certified |
 | `Return`, `NifResult`, `Error` variants | `Return`, `Nif_Result(T)`, `Error`, raw `Term`, domain `Result`, `badarg`, `raise` | conversion failure, domain errors and raised BEAM term |
 | `sys` NIF APIs and macro interfaces | OTP-generated `sys.api` lookup; ABI-sensitive structures/macros in `priv/c` | C shim, raw predicate, scheduler, resource and I/O tests; every raw function is not individually tested |
-| Mix compiler, Rustler configuration and crate scaffolding | patched Gleam hooks, bundled driver, native JSON and `new` | normal builds/tests, cached dependencies, source archives and shipments |
+| Mix compiler, Rustler configuration and crate scaffolding | stock Gleam wrapper, bundled driver, native JSON and `new` | wrapper builds/tests, cached dependencies, source archives and shipments |
 | Serde and Rust-specific traits/lifetimes | explicit codec callbacks and Odin ownership contract | custom codec and ownership suite; Rust enforcement/panic recovery excluded |
 
 Gleam adaptations deliberately preserve Gleam's representations. In particular,
@@ -58,5 +58,5 @@ compatibility format can be registered separately without changing those types.
 
 Remaining certification includes untested raw API operations, optional alternate
 wire formats, custom worker pools, target/collection combinations, and all
-requested operating-system/architecture/OTP combinations. These are tracked
-release gates, not silently excluded capabilities.
+requested operating-system/architecture/OTP combinations. These are future certification work. Glodin 0.1.0 claims the tested documented
+interfaces rather than exhaustive Rustler parity.

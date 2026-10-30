@@ -16,7 +16,7 @@ pub fn main() {
   let assert True = numbers == checks.echo_map(numbers)
   run_checks()
 }
-import glodin_conformance/checks
-import gleam/option
-import gleam/dict
 
+import gleam/dict
+import gleam/option
+import glodin_conformance/checks

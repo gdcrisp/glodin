@@ -1,41 +1,24 @@
 # Glodin
 
 Write Odin NIFs and call them as typed Gleam functions on Erlang. Glodin follows
-Rustler's workflow: scaffold a native module, annotate ordinary native functions,
-and let the normal language build command compile and load the NIF.
+a scaffold-and-generate workflow: annotate ordinary native functions and call
+statically typed generated Gleam bindings.
 
-**Development status:** the local workflow and conformance suite work. This is
-not a released or certified full-parity replacement. The platform matrix and the
-remaining verification gates in [the parity checklist](docs/parity.md) must pass
-before a release.
+Glodin 0.1.0 supports **stock Gleam 1.19.1+**, Erlang/OTP **27–29**,
+macOS/Linux on **arm64/x64**, and Odin **dev-2026-07a** (`819fdc7a8`)
+with its bundled core packages. Install OTP NIF development headers and a C11
+compiler. Python 3 is required only for repository tests. Rust and a custom
+Gleam compiler are not required.
 
-## Toolchain
-
-- Odin **dev-2026-07a** (`819fdc7a8`), including its bundled core packages.
-- Erlang/OTP 27, 28, or 29, with NIF development headers, and a C11 compiler.
-- The bundled patch of Gleam **1.19.1**. Stock Gleam does not execute these build
-  hooks. Python 3 and Rust are required to build the patched compiler and run
-  repository tests; they are not required by Glodin-powered applications.
-
-Build the compiler once, then put it on your path:
-
-```sh
-make compiler
-export PATH="$PWD/.tools/bin:$PATH"
-```
-
-The build script verifies the upstream source archive's SHA-256. The contribution
-is kept in [scripts/patch_gleam.py](scripts/patch_gleam.py) and as an apply-ready
-patch under [patches](patches/). It has not been submitted or accepted upstream.
+This is an initial release of the documented interfaces, not a claim of complete
+Rustler parity. See the [capability checklist](https://hexdocs.pm/glodin/parity.html).
 
 ## A native module
 
-Until Glodin is published, add it to your project's `gleam.toml` as a local
-dependency:
+Add Glodin:
 
-```toml
-[dependencies]
-glodin = { path = "/absolute/path/to/glodin" }
+```sh
+gleam add glodin@0.1.0
 ```
 
 Then scaffold a module:
@@ -44,7 +27,7 @@ Then scaffold a module:
 gleam run -m glodin -- new math
 ```
 
-Edit `native/math/lib.odin`:
+Edit `priv/glodin/native/math/lib.odin`:
 
 ```odin
 package my_app_math
@@ -66,22 +49,34 @@ pub fn main() {
 }
 ```
 
-Use ordinary `gleam build`, `gleam run`, and `gleam test`. Editing only Odin code
-invalidates the native build. `gleam check` and language-server analysis use the
-existing generated declarations and never run native build hooks. Regenerate
-declarations explicitly with `gleam run -m glodin -- generate` when needed.
+Build and run with the generated wrapper:
 
-The scaffold configures source-package inclusion for `native/` and the hook
-script, and excludes host binaries from Hex source packages. Add any additional
-native support directories to `erlang.extra_files`. `gleam export erlang-shipment`
-includes the compiled library in the owning application's `priv` directory.
+```sh
+escript glodin_build.escript build
+escript glodin_build.escript run
+escript glodin_build.escript test
+```
 
-See [examples/math](examples/math) for the minimal application and
-[examples/conformance](examples/conformance) for codecs, resources, jobs, and
-custom conversion examples.
+The wrapper builds native dependencies first, then your native modules, then
+invokes stock Gleam. Editing only Odin code invalidates the native build.
+Plain `gleam build/run/test` does not rebuild NIFs. Use ordinary `gleam check`
+and your editor for analysis without native compilation; use
+`escript glodin_build.escript generate` to refresh declarations explicitly.
 
-The [Rustler source API mapping](docs/rustler-api.md) records the corresponding
-operations, Gleam adaptations, tests, and remaining certification work.
+For applications that only consume a native library, add Glodin directly and
+run `gleam run -m glodin -- init` once to install the wrapper. Commit the wrapper
+and generated declarations/loaders so clean-checkout analysis works.
+
+Publish native sources using `escript glodin_build.escript publish`, which stages
+a source-only package without deleting local binaries. Native sources, imports,
+collections and watched support files must live under `priv/`. Deploy with
+`escript glodin_build.escript export erlang-shipment`, which builds optimized
+libraries and includes them in the owning application's `priv` directory.
+
+See the [workflow guide](https://hexdocs.pm/glodin/workflow.html),
+[minimal example](https://github.com/gdcrisp/glodin/tree/v0.1.0/examples/math),
+[conformance example](https://github.com/gdcrisp/glodin/tree/v0.1.0/examples/conformance),
+and [Rustler API mapping](https://hexdocs.pm/glodin/rustler-api.html).
 
 ## Native interfaces
 
@@ -129,13 +124,13 @@ Gleam representation. See `Positive` in the conformance example.
 
 `@(glodin_load)`, `@(glodin_upgrade)`, and `@(glodin_unload)` mark lifecycle
 callbacks. Their signatures are demonstrated in the examples and
-[the ownership guide](docs/ownership.md). Resources in exported signatures, or
+[the ownership guide](https://hexdocs.pm/glodin/ownership.html). Resources in exported signatures, or
 marked `@(glodin_resource)`, are registered automatically. Load callbacks can
 configure their destructors, monitor callbacks, and I/O stop callbacks.
 
 ## Module configuration
 
-Each `native/<name>/glodin.json` describes one module. The scaffold creates the
+Each `priv/glodin/native/<name>/glodin.json` describes one module. The scaffold creates the
 required fields. Optional fields are shown here:
 
 ```json
@@ -149,14 +144,14 @@ required fields. Optional fields are shown here:
   "cc": "cc",
   "odin_flags": [],
   "c_flags": [],
-  "collections": {"shared": "native/shared"},
-  "watch": ["include"],
+  "collections": {"shared": "priv/glodin/shared"},
+  "watch": ["priv/include"],
   "load_data": 0
 }
 ```
 
-`ODIN` and `CC` supply default compiler paths. Without `mode`, Gleam's development
-build uses debug information and production uses speed optimization. `target`
+`ODIN` and `CC` supply default compiler paths. Without `mode`, wrapper build/run/test commands use debug information; production shipments
+and source-release validation use speed optimization. `target`
 sets an Odin target; configure a matching C compiler/flags and OTP headers for
 cross compilation. Compiler-reported Odin source dependencies, `#load` files,
 OTP headers, toolkit sources, flags, versions, and explicit `watch` paths are
@@ -180,11 +175,15 @@ make check test
 ```
 
 The suite launches real BEAM VMs and tests native conversion failures, generated
-interfaces, incremental rebuilds, dependency hooks, failed-build recovery,
+interfaces, incremental rebuilds, native dependencies, failed-build recovery,
 resources, monitoring, destructor calls, jobs, upgrades, source packages, supplied
-libraries, and production shipments. CI defines macOS/Linux on arm64/x64 with
+libraries, and production shipments. The release CI matrix covers macOS/Linux on arm64/x64 with
 OTP 27–29. Local validation alone does not certify that matrix.
 
 Odin can corrupt memory or panic inside a NIF and terminate the VM. See the
-[ownership contract](docs/ownership.md) before keeping terms or data beyond a
+[ownership contract](https://hexdocs.pm/glodin/ownership.html) before keeping terms or data beyond a
 call. Glodin does not provide Rust's borrow checker or panic unwinding.
+
+## License
+
+MIT OR Apache-2.0, at your option. See [LICENSE](https://github.com/gdcrisp/glodin/blob/v0.1.0/LICENSE).

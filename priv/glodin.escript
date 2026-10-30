@@ -5,24 +5,232 @@
 main(Args) ->
     try dispatch(Args) catch
         throw:{glodin, Message} -> io:format(standard_error, "glodin: ~ts~n", [Message]), halt(1);
+        throw:{exit_status, Status} -> halt(Status);
         error:Reason:Stack -> io:format(standard_error, "glodin: ~p~n~p~n", [Reason, Stack]), halt(1)
     end.
 
 dispatch(["new", Name]) -> scaffold(Name);
-dispatch(["build"]) -> build();
-dispatch(["build", "--hook"]) -> build();
-dispatch(["generate"]) -> generate();
-dispatch(["doctor"]) ->
-    lists:foreach(fun(Tool) -> io:format("~s: ~p~n", [Tool, os:find_executable(Tool)]) end,
-                  ["odin", "cc", "erl", "escript"]);
-dispatch(_) -> fail("usage: gleam run -m glodin -- new MODULE | build | generate | doctor").
+dispatch(["init"]) -> install_wrapper();
+dispatch(["native-build"]) -> build();
+dispatch(["native-generate"]) ->
+    case modules() of [] -> ok; _ -> generate() end;
+dispatch(["doctor"]) -> doctor();
+dispatch(["--help"]) -> usage();
+dispatch(["help"]) -> usage();
+dispatch([]) -> usage();
+dispatch(Args) -> workflow(Args).
+
+gleam() -> env("GLEAM", "gleam").
+
+%% The wrapper is deliberately independent of Gleam compilation: declarations
+%% and loaders must exist before Gleam discovers or checks application modules.
+workflow([Command | Args]) when Command == "build"; Command == "run"; Command == "test" ->
+    ensure_erlang(Args),
+    prepare_native("native-build", "dev"),
+    forward(gleam(), [Command | Args], root());
+workflow(["generate"]) -> prepare_native("native-generate", "dev");
+workflow(["export", "erlang-shipment"]) ->
+    prepare_native("native-build", "prod"),
+    forward(gleam(), ["export", "erlang-shipment"], root());
+workflow(["export", "hex-tarball"]) -> source_release(false, []);
+workflow(["publish" | Args]) -> source_release(true, Args);
+workflow(_) -> usage(), fail("unsupported command; see the usage above").
+
+ensure_erlang(["--" | _]) -> ok;
+ensure_erlang([Flag, "javascript" | _]) when Flag == "--target"; Flag == "-t" ->
+    fail("Glodin supports only the Erlang target");
+ensure_erlang(["--target=javascript" | _]) -> fail("Glodin supports only the Erlang target");
+ensure_erlang([_ | Args]) -> ensure_erlang(Args);
+ensure_erlang([]) -> ok.
+
+prepare_native(Command, Mode) ->
+    forward(gleam(), ["deps", "download"], root()),
+    {Packages, _} = with_env([{"GLODIN_BUILD_MODE", Mode}], fun() -> package_order(root(), true, #{}, []) end),
+    Toolkit = toolkit(),
+    lists:foreach(fun(Package) ->
+        case filelib:wildcard(filename:join([Package,"priv","glodin","native","*","glodin.json"])) of
+            [] -> ok;
+            _ ->
+                with_env([{"GLODIN_PACKAGE_ROOT", Package}, {"GLODIN_PROJECT_ROOT", root()},
+                          {"GLODIN_PRIV", Toolkit}, {"GLODIN_BUILD_MODE", Mode}], fun() ->
+                    forward("escript", [filename:join(Toolkit,"glodin.escript"), Command], Package)
+                end)
+        end
+    end, Packages).
+
+package_info(Package) ->
+    maps:get(<<"gleam.toml">>, json:decode(run(gleam(), ["export","package-information"], Package))).
+
+%% Hex and Git packages are resolved by Gleam into the root build/packages.
+%% Path requirements are relative to the package declaring the requirement.
+package_order(Package0, IsRoot, Seen, Order) ->
+    Package = absolute(Package0),
+    case maps:get(Package, Seen, unseen) of
+        done -> {Order, Seen};
+        visiting -> fail("cyclic package dependency");
+        unseen ->
+            Info = package_info(Package),
+            Deps = maps:get(<<"dependencies">>, Info, #{}),
+            All = case IsRoot andalso env("GLODIN_BUILD_MODE", "dev") =/= "prod" of
+                true -> maps:merge(Deps, maps:get(<<"dev_dependencies">>, Info, #{}));
+                false -> Deps
+            end,
+            {Previous, Visited} = lists:foldl(fun({Name, Requirement}, {Acc, State}) ->
+                Dependency = case maps:get(<<"path">>, Requirement, undefined) of
+                    undefined -> filename:join([root(), "build", "packages", str(Name)]);
+                    Path -> filename:absname(str(Path), Package)
+                end,
+                case filelib:is_file(filename:join(Dependency,"gleam.toml")) of
+                    true -> package_order(Dependency, false, State, Acc);
+                    false -> {Acc, State} % Non-Gleam packages cannot contain Glodin modules.
+                end
+            end, {Order, Seen#{Package => visiting}}, lists:sort(maps:to_list(All))),
+            {Previous ++ [Package], Visited#{Package => done}}
+    end.
+
+with_env(Values, Fun) ->
+    Previous = [{Key, os:getenv(Key)} || {Key,_} <- Values],
+    lists:foreach(fun({Key,Value}) -> os:putenv(Key, Value) end, Values),
+    try Fun() after
+        lists:foreach(fun({Key,false}) -> os:unsetenv(Key);
+                         ({Key,Value}) -> os:putenv(Key,Value) end, Previous)
+    end.
+
+absolute(Path) ->
+    Parts = lists:foldl(fun(".", Acc) -> Acc;
+                          ("..", [_]) -> ["/"];
+                          ("..", [_|Acc]) -> Acc;
+                          (Part, Acc) -> [Part|Acc] end, [], filename:split(filename:absname(Path))),
+    filename:join(lists:reverse(Parts)).
+
+inside(Path, Directory) ->
+    A = absolute(Path), D = absolute(Directory),
+    A == D orelse lists:prefix(D ++ "/", A).
+
+%% Stock Gleam includes all of priv, including ignored binaries. Always export
+%% native source packages from a separate source-only tree, never by deleting
+%% artifacts from the working application.
+source_release(Publish, Args) ->
+    with_env([{"GLODIN_BUILD_MODE", "prod"}], fun() -> prepare_native("native-build", "prod") end),
+    validate_sources(),
+    Stage = filename:join([root(), ".glodin", "release_" ++ str(binary:encode_hex(crypto:strong_rand_bytes(12)))]),
+    ok = filelib:ensure_dir(filename:join(Stage,"_")),
+    try
+        lists:foreach(fun(Name) ->
+            Source = filename:join(root(),Name),
+            case filelib:is_file(Source) orelse filelib:is_dir(Source) of
+                true -> copy_source(Source, filename:join(Stage,Name));
+                false -> ok
+            end
+        end, ["gleam.toml", "manifest.toml", "README", "README.md", "README.txt", "LICENSE", "LICENSE.md", "LICENSE.txt",
+              "LICENCE", "LICENCE.md", "LICENCE.txt", "NOTICE", "NOTICE.md", "NOTICE.txt", "src", "priv", "docs"]),
+        %% Generate afresh so archived loaders never embed this host's artifact hash.
+        with_env([{"GLODIN_PACKAGE_ROOT", Stage}, {"GLODIN_PRIV", toolkit()}], fun() ->
+            case modules() of [] -> ok; _ -> generate() end
+        end),
+        forward(gleam(), ["export","hex-tarball"], Stage),
+        Info = package_info(Stage),
+        Name = str(maps:get(<<"name">>,Info)), Version = str(maps:get(<<"version">>,Info)),
+        Archive = Name ++ "-" ++ Version ++ ".tar",
+        Destination = filename:join([root(),"build",Archive]),
+        write(Destination, read(filename:join([Stage,"build",Archive]))),
+        io:format("Verified source archive: ~s~n", [Destination]),
+        case Publish of
+            true -> forward(gleam(), ["publish" | Args], Stage);
+            false -> ok
+        end
+    after file:del_dir_r(Stage) end.
+
+copy_source(Source, Destination) ->
+    case file:read_link(Source) of
+        {ok,_} -> fail(io_lib:format("source releases cannot contain symlinks: ~s",[Source]));
+        _ -> ok
+    end,
+    Name = filename:basename(Source),
+    Excluded = lists:member(Name,["native", "build", ".glodin", ".git", ".jj", "__pycache__"])
+        andalso (Name =/= "native" orelse absolute(Source) == absolute(filename:join([root(),"priv","native"]))),
+    Binary = lists:member(filename:extension(Name),[".so",".dylib",".o",".a",".dll",".beam",".pyc",".dSYM"]),
+    case Excluded orelse Binary of
+        true -> ok;
+        false ->
+            case filelib:is_dir(Source) of
+                true ->
+                    {ok, Names} = file:list_dir(Source),
+                    lists:foreach(fun(N) -> copy_source(filename:join(Source,N),filename:join(Destination,N)) end,Names);
+                false -> write(Destination,read(Source))
+            end
+    end.
+
+validate_sources() ->
+    case modules() of
+        [] -> ok;
+        Paths ->
+            OdinRoot = string:trim(str(run(env("ODIN","odin"),["root"],root()))),
+            lists:foreach(fun(Path) ->
+                Map = config(Path),
+                case maps:get(<<"skip_compilation">>,Map,false) of
+                    true -> fail("publishing supplied binary packages is not supported; publish native sources");
+                    false -> ok
+                end,
+                Values = maps:values(maps:get(<<"collections">>,Map,#{})) ++ maps:get(<<"watch">>,Map,[]),
+                lists:foreach(fun(P) -> require_packaged(filename:absname(str(P),root())) end,Values),
+                Cache = filename:join([root(),".glodin",str(maps:get(<<"name">>,Map))]),
+                {ok,Bytes} = file:read_file(filename:join(Cache,"dependencies.json")),
+                Deps = json:decode(Bytes),
+                Files = maps:get(<<"source_files">>,Deps,[]) ++ maps:get(<<"load_files">>,Deps,[]),
+                lists:foreach(fun(P) ->
+                    File = str(P),
+                    case inside(File,OdinRoot) orelse inside(File,toolkit()) orelse
+                         inside(File,filename:join(root(),".glodin")) of
+                        true -> ok;
+                        false -> require_packaged(File)
+                    end
+                end,Files)
+            end,Paths)
+    end.
+
+require_packaged(Path) ->
+    case inside(Path,filename:join(root(),"priv")) andalso
+         not inside(Path,filename:join([root(),"priv","native"])) of
+        true -> ok;
+        false -> fail(io_lib:format("native source dependency must be packaged under priv/: ~s",[Path]))
+    end.
+
+doctor() ->
+    lists:foreach(fun({Name,Args}) ->
+        Output = run(Name, Args, root()), io:format("~s: ~ts~n",[Name,Output])
+    end,[{gleam(),["--version"]},{env("ODIN","odin"),["version"]},{env("CC","cc"),["--version"]}]),
+    io:format("OTP: ~s~nNIF headers: ~s~n",[erlang:system_info(otp_release),filename:join(code:root_dir(),"usr/include")]).
+
+forward(Executable, Args, Cwd) ->
+    Path = case os:find_executable(Executable) of
+        false -> fail(io_lib:format("missing executable ~s",[Executable]));
+        Found -> Found
+    end,
+    Port = open_port({spawn_executable,Path},[{args,Args},{cd,Cwd},binary,use_stdio,stderr_to_stdout,exit_status]),
+    forward_output(Port).
+
+forward_output(Port) ->
+    receive
+        {Port,{data,Bytes}} -> io:put_chars(Bytes), forward_output(Port);
+        {Port,{exit_status,0}} -> ok;
+        {Port,{exit_status,Status}} -> throw({exit_status,Status})
+    end.
+
+usage() ->
+    io:format("Glodin 0.1.0 (stock Gleam, Erlang target)~n"
+              "Bootstrap: gleam run -m glodin -- init | new MODULE~n"
+              "Usage: escript glodin_build.escript build | run | test | generate | doctor~n"
+              "       escript glodin_build.escript export hex-tarball | export erlang-shipment~n"
+              "       escript glodin_build.escript publish~n"
+              "GLEAM, ODIN and CC select toolchain executables.~n").
 
 fail(Message) -> throw({glodin, Message}).
 str(B) when is_binary(B) -> binary_to_list(B);
 str(L) when is_list(L) -> L.
 env(Key, Default) -> case os:getenv(Key) of false -> Default; Value -> Value end.
-root() -> filename:absname(env("GLEAM_PACKAGE_ROOT", ".")).
-project_root() -> filename:absname(env("GLEAM_PROJECT_ROOT", root())).
+root() -> filename:absname(env("GLODIN_PACKAGE_ROOT", ".")).
+project_root() -> filename:absname(env("GLODIN_PROJECT_ROOT", root())).
 app_name() ->
     {ok, Toml} = file:read_file(filename:join(root(), "gleam.toml")),
     case re:run(Toml, "(?m)^name\\s*=\\s*\"([a-z][a-z0-9_]*)\"", [{capture, [1], list}]) of
@@ -76,87 +284,23 @@ scaffold(Name) ->
         _ -> fail("module names must be lowercase identifiers")
     end,
     App = app_name(),
-    Native = filename:join([root(), "native", Name]),
+    Native = filename:join([root(), "priv", "glodin", "native", Name]),
     case filelib:is_dir(Native) of true -> fail("native module already exists"); false -> ok end,
     Config = #{name => list_to_binary(Name), module => list_to_binary(App ++ "_" ++ Name ++ "_ffi"),
                gleam_module => list_to_binary(App ++ "/" ++ Name), otp_app => list_to_binary(App)},
     write(filename:join(Native, "glodin.json"), iolist_to_binary(json:encode(Config))),
     write(filename:join(Native, "lib.odin"), iolist_to_binary([
         "package ", App, "_", Name, "\n\n@(glodin_nif)\nadd :: proc(a, b: i64) -> i64 {\n\treturn a + b\n}\n"])),
-    {ok, Script} = file:read_file(filename:join(toolkit(), "glodin_build.escript")),
-    write(filename:join(root(), "glodin_build.escript"), Script),
-    TomlPath = filename:join(root(), "gleam.toml"),
-    {ok, Toml} = file:read_file(TomlPath),
-    WithHook = erlang_array(Toml, "build_hooks", [[<<"escript">>, <<"glodin_build.escript">>, <<"build">>, <<"--hook">>]]),
-    WithSources = erlang_array(WithHook, "extra_files", [<<"native">>, <<"glodin_build.escript">>]),
-    NewToml = erlang_array(WithSources, "exclude_files", [<<"priv/native">>]),
-    write(TomlPath, NewToml),
+    install_wrapper(),
     generate(),
-    io:format("Created native/~s and src/~s/~s.gleam.~nUse the patched Gleam for automatic builds.~n", [Name, App, Name]).
+    io:format("Created priv/glodin/native/~s and src/~s/~s.gleam.~n"
+              "Run escript glodin_build.escript test to build native code and test.~n", [Name, App, Name]).
 
-%% Preserve the user's TOML and append to the three known array-valued fields.
-%% This scanner tracks strings/comments so brackets in hook arguments are literal.
-erlang_array(Toml, Key, Values) ->
-    case re:run(Toml, "(?m)^\\[erlang\\][ \\t]*(?:#[^\\n]*)?$", [{capture,[0],index}]) of
-        nomatch -> erlang_array(<<Toml/binary,"\n[erlang]\n">>,Key,Values);
-        {match,[{Start,Length}]} ->
-            Offset = Start + Length,
-            Tail = binary:part(Toml,Offset,byte_size(Toml)-Offset),
-            End = case re:run(Tail,"(?m)^\\[\\[?[a-zA-Z_][a-zA-Z_0-9.\\\" -]*\\]\\]?[ \\t]*(?:#[^\\n]*)?$",[{capture,[0],index}]) of
-                {match,[{Next,_}]} -> Next;
-                nomatch -> byte_size(Tail)
-            end,
-            Body = binary:part(Tail,0,End),
-            Encoded = [iolist_to_binary(json:encode(V)) || V <- Values],
-            Missing = [V || V <- Encoded, binary:match(Body,V) == nomatch],
-            Skip = Key == "build_hooks" andalso binary:match(Body,<<"glodin_build.escript">>) =/= nomatch,
-            case Missing == [] orelse Skip of
-                true -> Toml;
-                false ->
-                    Added = iolist_to_binary(lists:join(<<", ">>,Missing)),
-                    Updated = case re:run(Body,"(?m)^[ \\t]*" ++ Key ++ "[ \\t]*=[ \\t]*(\\[)",[{capture,[1],index}]) of
-                        nomatch -> <<Body/binary,"\n",(list_to_binary(Key))/binary," = [",Added/binary,"]\n">>;
-                        {match,[{Open,_}]} ->
-                            {Close,Last} = array_close(Body,Open+1,1,normal,false,$[),
-                            Before = binary:part(Body,0,Close),
-                            After = binary:part(Body,Close,byte_size(Body)-Close),
-                            Comma = case Last of $[ -> <<>>; $, -> <<>>; _ -> <<", ">> end,
-                            <<Before/binary,Comma/binary,Added/binary,After/binary>>
-                    end,
-                    Prefix = binary:part(Toml,0,Offset),
-                    Rest = binary:part(Tail,End,byte_size(Tail)-End),
-                    <<Prefix/binary,Updated/binary,Rest/binary>>
-            end
-    end.
+install_wrapper() ->
+    Source = read(filename:join(toolkit(), "glodin_build.escript")),
+    write(filename:join(root(), "glodin_build.escript"), Source).
 
-array_close(Bytes,Pos,_Depth,_Mode,_Escaped,_Last) when Pos >= byte_size(Bytes) -> fail("unterminated build configuration array");
-array_close(Bytes,Pos,Depth,Mode,Escaped,Last) ->
-    C = binary:at(Bytes,Pos),
-    Next = Pos + 1,
-    case Mode of
-        comment -> array_close(Bytes,Next,Depth,case C of $\n -> normal; _ -> comment end,false,Last);
-        double ->
-            case {Escaped,C} of
-                {true,_} -> array_close(Bytes,Next,Depth,double,false,Last);
-                {false,$\\} -> array_close(Bytes,Next,Depth,double,true,Last);
-                {false,$"} -> array_close(Bytes,Next,Depth,normal,false,$");
-                _ -> array_close(Bytes,Next,Depth,double,false,Last)
-            end;
-        single -> array_close(Bytes,Next,Depth,case C of $' -> normal; _ -> single end,false,$');
-        normal ->
-            case C of
-                $# -> array_close(Bytes,Next,Depth,comment,false,Last);
-                $" -> array_close(Bytes,Next,Depth,double,false,$");
-                $' -> array_close(Bytes,Next,Depth,single,false,$');
-                $[ -> array_close(Bytes,Next,Depth+1,normal,false,$[);
-                $] when Depth == 1 -> {Pos,Last};
-                $] -> array_close(Bytes,Next,Depth-1,normal,false,$]);
-                _ when C == $\s; C == $\t; C == $\r; C == $\n -> array_close(Bytes,Next,Depth,normal,false,Last);
-                _ -> array_close(Bytes,Next,Depth,normal,false,C)
-            end
-    end.
-
-modules() -> lists:sort(filelib:wildcard(filename:join([root(), "native", "*", "glodin.json"]))).
+modules() -> lists:sort(filelib:wildcard(filename:join([root(), "priv", "glodin", "native", "*", "glodin.json"]))).
 config(Path) ->
     {ok, Bytes} = file:read_file(Path),
     Map = json:decode(Bytes),
@@ -196,7 +340,12 @@ generator() ->
 generate() ->
     Gen = generator(),
     Paths = modules(),
-    lists:foreach(fun(Path) -> generate_module(Gen, Path, config(Path)) end, Paths),
+    lists:foreach(fun(Path) ->
+        Map = config(Path),
+        generate_module(Gen, Path, Map),
+        Template = filename:join([root(), ".glodin", filename:basename(filename:dirname(Path)), "loader.erl"]),
+        write(filename:join([root(), "src", str(maps:get(<<"module">>, Map)) ++ ".erl"]), read(Template))
+    end, Paths),
     cleanup_generated(Paths).
 generate_module(Gen, Path, Map) ->
     Native = filename:dirname(Path),
@@ -205,6 +354,9 @@ generate_module(Gen, Path, Map) ->
            [str(K) ++ "=" ++ filename:absname(str(V), root()) || {K,V} <- maps:to_list(maps:get(<<"collections">>,Map,#{}))],
     Output = run(Gen, Args, root()),
     io:put_chars(Output),
+    Binding = filename:join([root(), ".glodin", filename:basename(Native), "bindings.gleam"]),
+    run(gleam(), ["format", Binding], root()),
+    write(filename:join([root(), "src", str(maps:get(<<"gleam_module">>, Map)) ++ ".gleam"]), read(Binding)),
     Loader = filename:join([root(), "src", str(maps:get(<<"module">>, Map)) ++ ".erl"]),
     case filelib:is_file(Loader) of
         true -> ok;
@@ -284,10 +436,10 @@ build_module(Path, Map) ->
             CC = str(maps:get(<<"cc">>, Map, env("CC", "cc"))),
             CompilerVersion = run(Odin, ["version"], root()),
             CCompilerVersion = run(CC, ["--version"], root()),
-            Mode = str(maps:get(<<"mode">>, Map, env("GLEAM_BUILD_MODE", "dev"))),
+            Mode = str(maps:get(<<"mode">>, Map, env("GLODIN_BUILD_MODE", "dev"))),
             %% Conservatively include the whole package: imported local Odin packages,
             %% headers and configuration all invalidate the native artifact.
-            Sources = lists:usort(tree(filename:join(root(), "native")) ++ tree(filename:join(Toolkit, "odin")) ++
+            Sources = lists:usort(tree(filename:join([root(), "priv", "glodin", "native"])) ++ tree(filename:join(Toolkit, "odin")) ++
                                   tree(filename:join(Toolkit, "c")) ++ tree(Include) ++
                                   lists:append([tree(filename:absname(str(P), root())) || P <- maps:get(<<"watch">>, Map, [])])),
             ComputeHash = fun() ->

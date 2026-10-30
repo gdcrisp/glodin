@@ -15,7 +15,7 @@ class Codegen(unittest.TestCase):
         integration.run(self.path, integration.GLEAM, "run", "-m", "glodin", "--", "new", "math")
 
     def test_resolved_parameters_types_and_imports(self):
-        (self.path / "native/math/lib.odin").write_text('''package codegen_checks
+        (self.path / "priv/glodin/native/math/lib.odin").write_text('''package codegen_checks
 import g "glodin:glodin"
 
 Pair_Value :: struct { first, second: i64 }
@@ -67,10 +67,10 @@ pub fn main() {
   let assert True = math.echo_container(value) == value
 }
 ''')
-        integration.run(self.path, integration.GLEAM, "test")
+        integration.native_run(self.path, "test")
 
     def test_invalid_interface_preserves_all_outputs(self):
-        native = self.path / "native/math/lib.odin"
+        native = self.path / "priv/glodin/native/math/lib.odin"
         original = native.read_text()
         outputs = [
             self.path / "src/sample/math.gleam",
@@ -98,7 +98,7 @@ pub fn main() {
                 native.write_text(original + "\n" + declaration + "\n")
                 output = integration.run(
                     self.path, "escript", str(integration.ROOT / "priv/glodin.escript"),
-                    "generate", success=False,
+                    "native-generate", success=False,
                 )
                 self.assertIn(diagnostic, output)
                 self.assertRegex(output, r"lib\.odin:\d+:\d+: glodin:")
