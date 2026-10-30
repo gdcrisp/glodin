@@ -464,12 +464,15 @@ build_module(Path, Map) ->
                         [str(X) || X <- maps:get(<<"c_flags">>, Map, [])], root()),
                     Temp = HashedArtifact ++ ".tmp.so",
                     Optimize = case Mode of "prod" -> "-o:speed"; "release" -> "-o:speed"; _ -> "-debug" end,
-                    Link = case os:type() of {unix, darwin} -> "-undefined dynamic_lookup"; _ -> "" end,
+                    LinkFlags = case os:type() of
+                        {unix, darwin} -> ["-extra-linker-flags:-undefined dynamic_lookup"];
+                        _ -> []
+                    end,
                     Flags = ["build", Native, "-build-mode:shared", "-no-entry-point", Optimize,
                         "-out:" ++ Temp, "-collection:glodin=" ++ filename:join(Toolkit, "odin"),
                         "-custom-attribute:glodin_nif,glodin_name,glodin_schedule,glodin_codec,glodin_tag,glodin_gleam,glodin_resource,glodin_load,glodin_upgrade,glodin_unload",
                         "-export-dependencies:json", "-export-dependencies-file:" ++ filename:join(Cache, "dependencies.json"),
-                        "-collection:glodin_shim=" ++ Cache, "-extra-linker-flags:" ++ Link] ++
+                        "-collection:glodin_shim=" ++ Cache] ++ LinkFlags ++
                         ["-collection:" ++ str(K) ++ "=" ++ filename:absname(str(V),root()) || {K,V} <- maps:to_list(maps:get(<<"collections">>,Map,#{}))] ++
                         case maps:get(<<"target">>,Map,undefined) of undefined -> []; Target -> ["-target:" ++ str(Target)] end ++
                         [str(X) || X <- maps:get(<<"odin_flags">>, Map, [])],

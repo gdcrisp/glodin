@@ -54,12 +54,13 @@ separate column; a local test does not certify every operation or platform.
 - [x] Migrate private state through an explicit upgrade callback.
 - [x] Exercise monitor cancellation, actual I/O readiness/stop, dynamic resource calls and yielding.
 - [x] Include native sources in a Hex archive and native libraries in a production shipment.
-- [ ] Run and pass the complete macOS/Linux × arm64/x64 × OTP 27/28/29 CI matrix.
 - [x] Support stock Gleam through the explicit wrapper; no compiler fork is required.
 
 Full operation-by-operation Rustler certification, custom worker pools, alternate
 wire formats, and certified cross-compilation are future work, not 0.1.0 claims.
-The complete platform matrix must pass before tagging 0.1.0.
+Release requirement: the complete macOS/Linux × arm64/x64 × OTP 27/28/29
+CI matrix must pass for the exact commit tagged 0.1.0. Consult the tagged
+commit's GitHub checks for its platform verification record.
 
 ## Deliberate substitutions and exclusions
 
