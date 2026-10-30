@@ -1,0 +1,13 @@
+**/build/
+/.tools/
+**/.glodin/
+**/priv/native/
+**/glodin_generated.odin
+*.so
+*.dylib
+*.o
+__pycache__/
+erl_crash.dump
+/.jj/
+*.dSYM/
+*.tar

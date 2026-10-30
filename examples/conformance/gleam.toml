@@ -1,0 +1,12 @@
+name = "glodin_conformance"
+version = "0.1.0"
+target = "erlang"
+
+[dependencies]
+glodin = { path = "../.." }
+gleam_stdlib = ">= 0.44.0 and < 2.0.0"
+
+[erlang]
+build_hooks = [["escript", "glodin_build.escript", "build", "--hook"]]
+extra_files = ["native", "glodin_build.escript"]
+exclude_files = ["priv/native"]

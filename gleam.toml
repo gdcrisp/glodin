@@ -1,0 +1,11 @@
+name = "glodin"
+version = "0.1.0"
+gleam = ">= 1.19.1"
+target = "erlang"
+licences = ["MIT", "Apache-2.0"]
+description = "Odin native implemented functions for Gleam on Erlang"
+
+[dependencies]
+gleam_stdlib = ">= 0.44.0 and < 2.0.0"
+
+[dev_dependencies]
