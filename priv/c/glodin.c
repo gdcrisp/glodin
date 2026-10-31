@@ -72,7 +72,7 @@ ERL_NIF_TERM glodin_resource_binary(ErlNifEnv *e,void *p,const void *data,size_t
 int glodin_monitor(ErlNifEnv *e,void *p,ErlNifPid *pid,ErlNifMonitor *m) { return enif_monitor_process(e,p,pid,m); }
 int glodin_demonitor(ErlNifEnv *e,void *p,ErlNifMonitor *m) { return enif_demonitor_process(e,p,m); }
 size_t glodin_monitor_size(void) { return sizeof(ErlNifMonitor); }
-int glodin_select(ErlNifEnv *e,int event,int flags,void *p,ErlNifPid *pid,ERL_NIF_TERM ref) { return enif_select(e,event,flags,p,pid,ref); }
+int glodin_select(ErlNifEnv *e,ErlNifEvent event,int flags,void *p,ErlNifPid *pid,ERL_NIF_TERM ref) { return enif_select(e,event,flags,p,pid,ref); }
 void *glodin_mutex_new(void) { return enif_mutex_create("glodin_resource"); }
 void glodin_mutex_lock(void *p) { enif_mutex_lock(p); }
 void glodin_mutex_unlock(void *p) { enif_mutex_unlock(p); }

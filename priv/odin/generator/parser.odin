@@ -35,7 +35,7 @@ attribute :: proc(decl: ^ast.Value_Decl, name: string) -> (string, bool) {
 			}
 			if x, ok := elem.derived.(^ast.Field_Value); ok && ident(x.field) == name {
 				literal, ok := x.value.derived.(^ast.Basic_Lit)
-				if !ok {
+				if !ok || literal.tok.kind != .String {
 					die(x, "attribute values must be string literals")
 				}
 				return strings.trim(literal.tok.text, "\""), true
@@ -43,6 +43,42 @@ attribute :: proc(decl: ^ast.Value_Decl, name: string) -> (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// The annotation vocabulary is versioned. Reject typos before emitting files.
+validate_annotations :: proc(decl: ^ast.Value_Decl) {
+	seen := make(map[string]bool)
+	defer delete(seen)
+	for attr in decl.attributes {
+		for elem in attr.elems {
+			name := ident(elem)
+			value := false
+			if field, ok := elem.derived.(^ast.Field_Value); ok {
+				name = ident(field.field)
+				value = true
+			}
+			if !strings.has_prefix(name, "glodin_") {
+				continue
+			}
+			if seen[name] {
+				die(elem, "duplicate Glodin annotation")
+			}
+			seen[name] = true
+			switch name {
+			case "glodin_nif", "glodin_load", "glodin_upgrade", "glodin_unload", "glodin_resource":
+				if value {
+					die(elem, "Glodin marker annotations cannot have a value")
+				}
+			case "glodin_name", "glodin_schedule", "glodin_codec", "glodin_tag", "glodin_gleam":
+				if !value {
+					die(elem, "Glodin value annotations require a string literal")
+				}
+				attribute(decl, name)
+			case:
+				die(elem, fmt.tprintf("unknown Glodin annotation %s", name))
+			}
+		}
+	}
 }
 
 snake :: proc(name: string) -> string {
@@ -125,7 +161,7 @@ parse_native :: proc(s: ^State) {
 	slice.sort(paths[:])
 	for path in paths {
 		file := pkg.files[path]
-		if filepath.base(path) == "glodin_generated.odin" {
+		if !file_matches_target(file, s.target) {
 			continue
 		}
 		for imp in file.imports {
@@ -148,17 +184,27 @@ parse_native :: proc(s: ^State) {
 				continue
 			}
 			name := ident(decl.names[0])
+			validate_annotations(decl)
 			s.declarations[name] = Declaration{decl, file}
 			if _, resource := attribute(decl, "glodin_resource"); resource {
 				s.resources[name] = true
 			}
 			if _, tagged := attribute(decl, "glodin_load"); tagged {
+				if s.load_proc != "" {
+					die(decl, "only one glodin_load callback is allowed")
+				}
 				s.load_proc = name
 			}
 			if _, tagged := attribute(decl, "glodin_upgrade"); tagged {
+				if s.upgrade_proc != "" {
+					die(decl, "only one glodin_upgrade callback is allowed")
+				}
 				s.upgrade_proc = name
 			}
 			if _, tagged := attribute(decl, "glodin_unload"); tagged {
+				if s.unload_proc != "" {
+					die(decl, "only one glodin_unload callback is allowed")
+				}
 				s.unload_proc = name
 			}
 			if _, tagged := attribute(decl, "glodin_nif"); !tagged {
@@ -193,4 +239,21 @@ parse_native :: proc(s: ^State) {
 	if len(s.functions) == 0 {
 		die(nil, "native module contains no @(glodin_nif) procedures")
 	}
+}
+
+file_matches_target :: proc(file: ^ast.File, target: parser.Build_Target) -> bool {
+	name := strings.trim_suffix(filepath.base(file.fullpath), ".odin")
+	if name == "glodin_generated" || strings.has_suffix(name, "_test") {
+		return false
+	}
+	parts := strings.split(name, "_")
+	for part in parts[max(0, len(parts) - 2):] {
+		if os, _ := parser.get_build_os_from_string(part); os != .Unknown && os != target.os {
+			return false
+		}
+		if arch := parser.get_build_arch_from_string(part); arch != .Unknown && arch != target.arch {
+			return false
+		}
+	}
+	return parser.match_build_tags(parser.parse_file_tags(file^), target)
 }

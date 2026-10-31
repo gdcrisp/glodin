@@ -7,12 +7,14 @@ import shutil
 import subprocess
 import tempfile
 import tarfile
+import sys
 import unittest
 
 ROOT = Path(__file__).resolve().parent.parent
 GLEAM = shutil.which(os.environ.get("GLEAM_BIN", "gleam"))
 assert GLEAM, "Gleam must be installed"
 STDLIB = ROOT / "build/packages/gleam_stdlib"
+NATIVE_EXTENSION = ".dll" if sys.platform == "win32" else ".so"
 
 
 def run(cwd, *args, success=True, env=None):
@@ -192,7 +194,7 @@ class Integration(unittest.TestCase):
             "29 = glodin_conformance_checks_ffi:load_value(), halt(0).")
         native_run(target, "export", "erlang-shipment")
         shipment = target / "build/erlang-shipment"
-        self.assertTrue(list(shipment.rglob("*.so")))
+        self.assertTrue(list(shipment.rglob("*" + NATIVE_EXTENSION)))
         shipment_paths = [str(p) for p in shipment.rglob("ebin")]
         self.assertTrue(shipment_paths)
         run(shipment, "erl", "+S", "2:2", "-noshell", "-pa", *shipment_paths, "-eval",
@@ -202,7 +204,7 @@ class Integration(unittest.TestCase):
         self.scaffold()
         (self.path / "README.md").write_text("# Source fixture\nNative addition example.\n")
         native_run(self.path, "test")
-        binary = next((self.path / "priv/native").glob("sample_math_ffi_*.so"))
+        binary = next((self.path / "priv/native").glob("sample_math_ffi_*" + NATIVE_EXTENSION))
         before = binary.read_bytes()
         config = self.path / "gleam.toml"
         original_config = config.read_text()
@@ -235,12 +237,12 @@ class Integration(unittest.TestCase):
     def test_explicit_binary_needs_no_native_toolchain(self):
         self.scaffold()
         native_run(self.path, "test")
-        binary = next((self.path / "priv/native").glob("sample_math_ffi_*.so"))
-        prebuilt = self.path / "supplied.so"
+        binary = next((self.path / "priv/native").glob("sample_math_ffi_*" + NATIVE_EXTENSION))
+        prebuilt = self.path / ("supplied" + NATIVE_EXTENSION)
         shutil.copyfile(binary, prebuilt)
         config = self.path / "priv/glodin/native/math/glodin.json"
         values = json.loads(config.read_text())
-        values.update(skip_compilation=True, artifact="supplied.so")
+        values.update(skip_compilation=True, artifact="supplied" + NATIVE_EXTENSION)
         config.write_text(json.dumps(values))
         shutil.rmtree(self.path / ".glodin")
         native_run(self.path, "test", env={"ODIN": "glodin_missing_odin", "CC": "glodin_missing_cc"})
@@ -287,7 +289,7 @@ class Integration(unittest.TestCase):
         native_run(app, "test")
         shipment_output = native_run(app, "export", "erlang-shipment")
         shipment = app / "build/erlang-shipment"
-        self.assertTrue(list(shipment.rglob("native_library_math_ffi_*.so")), shipment_output)
+        self.assertTrue(list(shipment.rglob("native_library_math_ffi_*" + NATIVE_EXTENSION)), shipment_output)
         paths = [str(p) for p in shipment.rglob("ebin")]
         run(shipment, "erl", "+S", "2:2", "-noshell", "-pa", *paths, "-eval",
             '42 = middle:answer(), halt(0).')
@@ -300,7 +302,7 @@ class Integration(unittest.TestCase):
         self.assertIn("LICENSE", names)
         self.assertIn("priv/docs/workflow.md", names)
         self.assertIn("priv/odin/generator/main.odin", names)
-        self.assertFalse(any(n.endswith((".so", ".o", ".beam")) or ".dSYM/" in n for n in names))
+        self.assertFalse(any(n.endswith((".so", ".dll", ".pdb", ".o", ".beam")) or ".dSYM/" in n for n in names))
         run(extracted, GLEAM, "docs", "build")
         app = self.path / "app"
         package(app, "archive_consumer")

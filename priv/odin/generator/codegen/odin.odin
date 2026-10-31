@@ -34,6 +34,8 @@ emit_odin :: proc(interface: ^Interface) -> string {
 				)
 			case Resource_Codec:
 				fmt.sbprintf(&b, "\tg__.register_resource_codec(%s)\n", registration.type)
+			case Json_Codec:
+				fmt.sbprintf(&b, "\tg__.register_json_codec(%s)\n", registration.type)
 			}
 		}
 		fmt.sbprintf(&b, "}}\n")

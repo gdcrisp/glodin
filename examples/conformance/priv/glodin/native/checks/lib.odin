@@ -4,7 +4,6 @@ import "base:runtime"
 import math_big "core:math/big"
 import "core:mem"
 import "core:sync"
-import "core:sys/posix"
 import bigint "glodin:bigint"
 import g "glodin:glodin"
 import sys "glodin:sys"
@@ -53,23 +52,11 @@ Blob :: struct {
 @(glodin_resource)
 Selectable :: struct {
 	lock:      sync.Mutex,
-	read_fd:   posix.FD,
-	write_fd:  posix.FD,
+	read_event:  g.Event,
+	write_event: g.Event,
 	recipient: g.Pid,
 }
 
-close_selectable :: proc(value: ^Selectable) {
-	sync.mutex_lock(&value.lock)
-	defer sync.mutex_unlock(&value.lock)
-	if value.read_fd >= 0 {
-		posix.close(value.read_fd)
-		value.read_fd = -1
-	}
-	if value.write_fd >= 0 {
-		posix.close(value.write_fd)
-		value.write_fd = -1
-	}
-}
 @(glodin_gleam = "Int")
 Positive :: distinct i64
 
@@ -83,6 +70,8 @@ Native_Value :: union {
 	string,
 }
 counter_type: g.Resource_Type(Counter)
+worker_pool: ^g.Worker_Pool
+pool_gate: sync.Sema
 
 @(glodin_load)
 on_load :: proc(env: ^g.Env, data: ^rawptr, info: g.Term) -> i32 {
@@ -119,7 +108,7 @@ on_load :: proc(env: ^g.Env, data: ^rawptr, info: g.Term) -> i32 {
 	})
 	_, selectable_ok := g.resource_open(env, "selectable", Selectable, g.Resource_Callbacks(Selectable) {
 		destroy = close_selectable,
-		stop = proc(env: ^g.Env, value: ^Selectable, event: i32, direct: bool) {
+		stop = proc(env: ^g.Env, value: ^Selectable, event: g.Event, direct: bool) {
 			close_selectable(value)
 			message_env := g.env_new()
 			defer g.env_destroy(&message_env)
@@ -142,6 +131,11 @@ on_load :: proc(env: ^g.Env, data: ^rawptr, info: g.Term) -> i32 {
 			return g.encode(env, i64((^Positive)(value.data)^)), true
 		},
 	})
+	pool, pool_ok := g.pool_new(2, 4)
+	if !pool_ok {
+		return -1
+	}
+	worker_pool = pool
 	return 0
 }
 
@@ -316,6 +310,37 @@ echo_result :: proc(result: g.Result(i64, string)) -> g.Result(i64, string) {
 @(glodin_nif)
 echo_option :: proc(option: g.Option(i64)) -> g.Option(i64) {
 	return option
+}
+
+@(glodin_nif)
+echo_json :: proc(value: g.Json(Person)) -> g.Json(Person) {
+	return value
+}
+
+@(glodin_nif)
+pool_enqueue :: proc(recipient: g.Pid, n: i64) -> bool {
+	data := new(i64, runtime.heap_allocator())
+	data^ = n
+	ok := g.pool_submit(worker_pool, recipient, data, proc(job: ^g.Job) {
+		defer free(job.data, runtime.heap_allocator())
+		g.job_send(job, g.Atom(g.atom(job.env.env, "pool_started")))
+		sync.sema_wait(&pool_gate)
+		g.job_send(job, (^i64)(job.data)^ * 2)
+	})
+	if !ok {
+		free(data, runtime.heap_allocator())
+	}
+	return ok
+}
+
+@(glodin_nif)
+pool_release :: proc() {
+	sync.sema_post(&pool_gate, 6)
+}
+
+@(glodin_nif, glodin_schedule = "DirtyIo")
+pool_close :: proc() {
+	g.pool_close(worker_pool)
 }
 @(glodin_nif, glodin_name = "renamed", glodin_schedule = "DirtyCpu")
 dirty_operation :: proc(n: i64) -> i64 {
@@ -533,22 +558,8 @@ watch_then_cancel :: proc(env: ^g.Env, recipient, target: g.Pid) -> g.Resource(O
 }
 
 @(glodin_nif)
-select_start :: proc(env: ^g.Env) -> g.Resource(Selectable) {
-	fds: [2]posix.FD
-	assert(posix.pipe(&fds) == .OK)
-	pid, found := g.self(env)
-	assert(found)
-	resource, ok := g.resource_new(Selectable{read_fd = fds[0], write_fd = fds[1], recipient = pid})
-	assert(ok)
-	assert(sys.select(env, i32(fds[0]), 1, resource.handle, &pid, g.make_reference(env)) >= 0)
-	byte: u8 = 1
-	assert(posix.write(fds[1], &byte, 1) == 1)
-	return resource
-}
-
-@(glodin_nif)
 select_stop :: proc(env: ^g.Env, resource: g.Resource(Selectable)) -> bool {
-	flags := sys.select(env, i32(resource.data.read_fd), 4, resource.handle, nil, g.make_reference(env))
+	flags := sys.select(env, resource.data.read_event, 4, resource.handle, nil, g.make_reference(env))
 	return (flags & 3) != 0
 }
 @(glodin_nif)

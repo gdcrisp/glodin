@@ -116,6 +116,18 @@ pub fn echo_result(result: Result(Int, String)) -> Result(Int, String)
 @external(erlang, "glodin_conformance_checks_ffi", "echo_option")
 pub fn echo_option(option: option.Option(Int)) -> option.Option(Int)
 
+@external(erlang, "glodin_conformance_checks_ffi", "echo_json")
+pub fn echo_json(value: BitArray) -> BitArray
+
+@external(erlang, "glodin_conformance_checks_ffi", "pool_enqueue")
+pub fn pool_enqueue(recipient: types.Pid, n: Int) -> Bool
+
+@external(erlang, "glodin_conformance_checks_ffi", "pool_release")
+pub fn pool_release() -> Nil
+
+@external(erlang, "glodin_conformance_checks_ffi", "pool_close")
+pub fn pool_close() -> Nil
+
 @external(erlang, "glodin_conformance_checks_ffi", "renamed")
 pub fn renamed(n: Int) -> Int
 
@@ -173,9 +185,6 @@ pub fn watch_then_cancel(
   target: types.Pid,
 ) -> ObservedResource
 
-@external(erlang, "glodin_conformance_checks_ffi", "select_start")
-pub fn select_start() -> SelectableResource
-
 @external(erlang, "glodin_conformance_checks_ffi", "select_stop")
 pub fn select_stop(resource: SelectableResource) -> Bool
 
@@ -193,3 +202,6 @@ pub fn check_low_level(value: types.Term) -> Bool
 
 @external(erlang, "glodin_conformance_checks_ffi", "check_allocator")
 pub fn check_allocator() -> Bool
+
+@external(erlang, "glodin_conformance_checks_ffi", "select_start")
+pub fn select_start() -> SelectableResource

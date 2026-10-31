@@ -71,7 +71,7 @@ ERL_NIF_TERM glodin_resource_binary(ErlNifEnv *e, void *resource, const void *da
 int glodin_monitor(ErlNifEnv *e, void *resource, ErlNifPid *pid, ErlNifMonitor *monitor);
 int glodin_demonitor(ErlNifEnv *e, void *resource, ErlNifMonitor *monitor);
 size_t glodin_monitor_size(void);
-int glodin_select(ErlNifEnv *e, int event, int flags, void *resource, ErlNifPid *pid, ERL_NIF_TERM ref);
+int glodin_select(ErlNifEnv *e, ErlNifEvent event, int flags, void *resource, ErlNifPid *pid, ERL_NIF_TERM ref);
 void *glodin_mutex_new(void);
 void glodin_mutex_lock(void *mutex);
 void glodin_mutex_unlock(void *mutex);

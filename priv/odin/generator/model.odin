@@ -2,6 +2,7 @@ package main
 
 import "codegen"
 import "core:odin/ast"
+import "core:odin/parser"
 
 Declaration :: struct {
 	decl: ^ast.Value_Decl,
@@ -15,6 +16,7 @@ Native_Function :: struct {
 	decl:            ^ast.Value_Decl,
 }
 State :: struct {
+	target: parser.Build_Target,
 	root, native, module, gleam_module, app, package_name: string,
 	declarations:                                          map[string]Declaration,
 	imports:                                               map[string]string,

@@ -1,6 +1,7 @@
 package main
 
 import "core:mem"
+import "core:odin/parser"
 import "core:os"
 import "core:path/filepath"
 import "core:strings"
@@ -25,6 +26,7 @@ main :: proc() {
 	context.temp_allocator = context.allocator
 
 	s := State {
+		target       = {os = ODIN_OS, arch = ODIN_ARCH},
 		native       = os.args[1],
 		root         = os.args[2],
 		module       = os.args[3],
@@ -32,7 +34,17 @@ main :: proc() {
 		app          = os.args[5],
 	}
 	for argument in os.args[6:] {
-		if index := strings.index_byte(argument, '='); index >= 0 {
+		if strings.has_prefix(argument, "--target=") {
+			parts := strings.split(argument[len("--target="):], "_")
+			if len(parts) != 2 {
+				die(nil, "generator target requires OS_ARCH")
+			}
+			s.target.os, _ = parser.get_build_os_from_string(parts[0])
+			s.target.arch = parser.get_build_arch_from_string(parts[1])
+			if s.target.os == .Unknown || s.target.arch == .Unknown {
+				die(nil, "unsupported generator target")
+			}
+		} else if index := strings.index_byte(argument, '='); index >= 0 {
 			s.collections[argument[:index]] = argument[index + 1:]
 		} else {
 			die(nil, "collections must use NAME=PATH")

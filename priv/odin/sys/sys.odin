@@ -3,14 +3,14 @@ package sys
 
 Env :: struct {}
 Term :: distinct uintptr
-Pid :: struct {
-	handle: uintptr,
-}
+Pid :: struct { handle: uintptr }
 Monitor :: struct {}
+
+when ODIN_OS == .Windows { Event :: rawptr } else { Event :: i32 }
 
 foreign import shim "glodin_shim:shim.o"
 
-@(default_calling_convention = "c", link_prefix = "glodin_")
+@(default_calling_convention="c", link_prefix="glodin_")
 foreign shim {
 	get_i64 :: proc(p0: ^Env, p1: Term, p2: ^i64) -> i32 ---
 	get_u64 :: proc(p0: ^Env, p1: Term, p2: ^u64) -> i32 ---
@@ -80,7 +80,7 @@ foreign shim {
 	monitor :: proc(p0: ^Env, p1: rawptr, p2: ^Pid, p3: ^Monitor) -> i32 ---
 	demonitor :: proc(p0: ^Env, p1: rawptr, p2: ^Monitor) -> i32 ---
 	monitor_size :: proc() -> uint ---
-	select :: proc(p0: ^Env, p1: i32, p2: i32, p3: rawptr, p4: ^Pid, p5: Term) -> i32 ---
+	select :: proc(p0: ^Env, p1: Event, p2: i32, p3: rawptr, p4: ^Pid, p5: Term) -> i32 ---
 	mutex_new :: proc() -> rawptr ---
 	mutex_lock :: proc(p0: rawptr) ---
 	mutex_unlock :: proc(p0: rawptr) ---

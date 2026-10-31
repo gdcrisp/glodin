@@ -25,7 +25,7 @@ Monitor :: struct {
 Resource_Callbacks :: struct($T: typeid) {
 	destroy: proc(data: ^T),
 	down:    proc(env: ^Env, data: ^T, pid: Pid, monitor: rawptr),
-	stop:    proc(env: ^Env, data: ^T, event: i32, direct: bool),
+	stop:    proc(env: ^Env, data: ^T, event: Event, direct: bool),
 	dyncall: proc(env: ^Env, data: ^T, call_data: rawptr),
 }
 
@@ -43,7 +43,7 @@ Resource_Descriptor :: struct {
 	name:    string,
 	destroy: proc(_: rawptr),
 	down:    proc(_: ^Env, _: rawptr, _: Pid, _: rawptr),
-	stop:    proc(_: ^Env, _: rawptr, _: i32, _: bool),
+	stop:    proc(_: ^Env, _: rawptr, _: Event, _: bool),
 	dyncall: proc(_: ^Env, _: rawptr, _: rawptr),
 }
 @(private)
@@ -85,7 +85,7 @@ resource_down_callback :: proc "c" (env: ^Env, handle: rawptr, pid: ^Pid, monito
 	}
 }
 @(private)
-resource_stop_callback :: proc "c" (env: ^Env, handle: rawptr, event: i32, direct: i32) {
+resource_stop_callback :: proc "c" (env: ^Env, handle: rawptr, event: Event, direct: i32) {
 	context = runtime.default_context()
 	desc := resource_descriptor((^Resource_Header)(handle))
 	if desc.stop != nil {
@@ -182,7 +182,7 @@ resource_open_with_callbacks :: proc(
 			c.down(e, (^T)(ptr), pid, monitor)
 		}
 	}
-	desc.stop = proc(e: ^Env, ptr: rawptr, event: i32, direct: bool) {
+	desc.stop = proc(e: ^Env, ptr: rawptr, event: Event, direct: bool) {
 		c := get_resource_callbacks(T)
 		if c.stop != nil {
 			c.stop(e, (^T)(ptr), event, direct)

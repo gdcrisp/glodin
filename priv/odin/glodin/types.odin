@@ -9,6 +9,7 @@ Term :: sys.Term
 Atom :: distinct Term
 Reference :: distinct Term
 Pid :: sys.Pid
+Event :: sys.Event
 Raw_Nif :: proc "c" (env: ^Env, argc: i32, argv: [^]Term) -> Term
 
 // Binary is a read-only view valid for the current environment's lifetime.

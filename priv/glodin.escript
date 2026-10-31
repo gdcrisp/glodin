@@ -105,7 +105,7 @@ absolute(Path) ->
 
 inside(Path, Directory) ->
     A = absolute(Path), D = absolute(Directory),
-    A == D orelse lists:prefix(D ++ "/", A).
+    lists:prefix(filename:split(D), filename:split(A)).
 
 %% Stock Gleam includes all of priv, including ignored binaries. Always export
 %% native source packages from a separate source-only tree, never by deleting
@@ -149,7 +149,7 @@ copy_source(Source, Destination) ->
     Name = filename:basename(Source),
     Excluded = lists:member(Name,["native", "build", ".glodin", ".git", ".jj", "__pycache__"])
         andalso (Name =/= "native" orelse absolute(Source) == absolute(filename:join([root(),"priv","native"]))),
-    Binary = lists:member(filename:extension(Name),[".so",".dylib",".o",".a",".dll",".beam",".pyc",".dSYM"]),
+    Binary = lists:member(filename:extension(Name),[".so",".dylib",".o",".a",".dll",".pdb",".lib",".exp",".beam",".pyc",".dSYM"]),
     case Excluded orelse Binary of
         true -> ok;
         false ->
@@ -286,7 +286,7 @@ scaffold(Name) ->
     App = app_name(),
     Native = filename:join([root(), "priv", "glodin", "native", Name]),
     case filelib:is_dir(Native) of true -> fail("native module already exists"); false -> ok end,
-    Config = #{name => list_to_binary(Name), module => list_to_binary(App ++ "_" ++ Name ++ "_ffi"),
+    Config = #{schema_version => 1, name => list_to_binary(Name), module => list_to_binary(App ++ "_" ++ Name ++ "_ffi"),
                gleam_module => list_to_binary(App ++ "/" ++ Name), otp_app => list_to_binary(App)},
     write(filename:join(Native, "glodin.json"), iolist_to_binary(json:encode(Config))),
     write(filename:join(Native, "lib.odin"), iolist_to_binary([
@@ -303,26 +303,105 @@ install_wrapper() ->
 modules() -> lists:sort(filelib:wildcard(filename:join([root(), "priv", "glodin", "native", "*", "glodin.json"]))).
 config(Path) ->
     {ok, Bytes} = file:read_file(Path),
-    Map = json:decode(Bytes),
+    Map = try json:decode(Bytes) catch error:_ -> config_error(Path, "invalid JSON") end,
+    case is_map(Map) of true -> ok; false -> config_error(Path, "expected a JSON object") end,
+    Allowed = [<<"schema_version">>, <<"name">>, <<"module">>, <<"gleam_module">>, <<"otp_app">>,
+               <<"mode">>, <<"odin">>, <<"cc">>, <<"odin_flags">>, <<"c_flags">>, <<"collections">>,
+               <<"watch">>, <<"load_data">>, <<"load_data_fun">>, <<"target">>, <<"otp_include">>,
+               <<"skip_compilation">>, <<"artifact">>],
     lists:foreach(fun(Key) ->
-        Value = maps:get(Key, Map),
-        Pattern = case Key of <<"gleam_module">> -> "^[a-z][a-z0-9_/]*$"; _ -> "^[a-z][a-z0-9_]*$" end,
-        case re:run(Value, Pattern, [{capture, none}]) of
-            match -> ok;
-            _ -> fail(io_lib:format("invalid ~s in ~s", [Key, Path]))
+        case lists:member(Key, Allowed) of
+            true -> ok;
+            false -> config_error(Path, ["unknown field ", Key])
         end
+    end, maps:keys(Map)),
+    case maps:get(<<"schema_version">>, Map, 1) of
+        1 -> ok;
+        _ -> config_error(Path, "schema_version must be 1")
+    end,
+    lists:foreach(fun(Key) ->
+        Value = maps:get(Key, Map, undefined),
+        Pattern = case Key of
+            <<"gleam_module">> -> "^[a-z][a-z0-9_]*(/[a-z][a-z0-9_]*)*$";
+            _ -> "^[a-z][a-z0-9_]*$"
+        end,
+        require_identifier(Path, Key, Value, Pattern)
     end, [<<"name">>, <<"module">>, <<"gleam_module">>, <<"otp_app">>]),
+    lists:foreach(fun(Key) ->
+        case maps:find(Key, Map) of
+            {ok, Value} -> require_string(Path, Key, Value);
+            error -> ok
+        end
+    end, [<<"odin">>, <<"cc">>, <<"target">>, <<"otp_include">>, <<"artifact">>]),
+    lists:foreach(fun(Key) ->
+        Values = maps:get(Key, Map, []),
+        case is_list(Values) of true -> ok; false -> config_error(Path, [Key, " must be an array"]) end,
+        lists:foreach(fun(Value) -> require_string(Path, Key, Value) end, Values)
+    end, [<<"odin_flags">>, <<"c_flags">>, <<"watch">>]),
+    case maps:get(<<"mode">>, Map, <<"dev">>) of
+        Mode when Mode == <<"dev">>; Mode == <<"debug">>; Mode == <<"prod">>; Mode == <<"release">> -> ok;
+        _ -> config_error(Path, "mode must be dev, debug, prod, or release")
+    end,
+    Collections = maps:get(<<"collections">>, Map, #{}),
+    case is_map(Collections) of true -> ok; false -> config_error(Path, "collections must be an object") end,
+    lists:foreach(fun({Key, Value}) ->
+        require_identifier(Path, <<"collection name">>, Key, "^[a-z][a-z0-9_]*$"),
+        case lists:member(Key, [<<"glodin">>, <<"glodin_shim">>]) of
+            true -> config_error(Path, "glodin and glodin_shim collections are reserved");
+            false -> ok
+        end,
+        require_string(Path, <<"collection path">>, Value)
+    end, maps:to_list(Collections)),
+    case maps:get(<<"skip_compilation">>, Map, false) of
+        true -> require_string(Path, <<"artifact">>, maps:get(<<"artifact">>, Map, undefined));
+        false -> ok;
+        _ -> config_error(Path, "skip_compilation must be a boolean")
+    end,
+    case maps:is_key(<<"load_data">>, Map) andalso maps:is_key(<<"load_data_fun">>, Map) of
+        true -> config_error(Path, "load_data and load_data_fun are mutually exclusive");
+        false -> ok
+    end,
+    case maps:find(<<"load_data_fun">>, Map) of
+        error -> ok;
+        {ok, [M, F]} -> lists:foreach(fun(Value) ->
+            require_identifier(Path, <<"load_data_fun">>, Value, "^[a-z][a-z0-9_]*$")
+        end, [M, F]);
+        _ -> config_error(Path, "load_data_fun must contain module and function identifiers")
+    end,
     case str(maps:get(<<"name">>, Map)) == filename:basename(filename:dirname(Path)) of
         true -> ok;
         false -> fail("native module name must match its directory")
     end,
     Map.
 
+config_error(Path, Message) -> fail(io_lib:format("~s: ~ts", [Path, Message])).
+require_string(Path, Key, Value) ->
+    case is_binary(Value) andalso byte_size(Value) > 0 andalso binary:match(Value, <<0>>) == nomatch of
+        true -> ok;
+        false -> config_error(Path, [Key, " must be a nonempty string without NUL bytes"])
+    end.
+require_identifier(Path, Key, Value, Pattern) ->
+    require_string(Path, Key, Value),
+    case re:run(Value, Pattern, [{capture, none}]) of
+        match -> ok;
+        _ -> config_error(Path, ["invalid ", Key])
+    end.
+
+%% Reject every configuration and output collision before generation changes files.
+module_configs() ->
+    Configs = [{Path, config(Path)} || Path <- modules()],
+    Outputs = lists:append([[<<"src/", (maps:get(<<"gleam_module">>, Map))/binary, ".gleam">>,
+                            <<"src/", (maps:get(<<"module">>, Map))/binary, ".erl">>] || {_, Map} <- Configs]),
+    case length(Outputs) == length(lists:usort(Outputs)) of
+        true -> Configs;
+        false -> fail("native modules have conflicting generated module names")
+    end.
+
 generator() ->
     Toolkit = toolkit(),
     Cache = filename:join(root(), ".glodin"),
     ok = filelib:ensure_dir(filename:join(Cache, "_")),
-    Executable = filename:join(Cache, "generator"),
+    Executable = filename:join(Cache, case os:type() of {win32,_} -> "generator.exe"; _ -> "generator" end),
     Sources = tree(filename:join(Toolkit, "odin/generator")),
     Version = run(env("ODIN", "odin"), ["version"], root()),
     Hash = hash([Version | [read(P) || P <- Sources]]),
@@ -338,19 +417,19 @@ generator() ->
     Executable.
 
 generate() ->
+    Configs = module_configs(),
     Gen = generator(),
-    Paths = modules(),
-    lists:foreach(fun(Path) ->
-        Map = config(Path),
+    lists:foreach(fun({Path, Map}) ->
         generate_module(Gen, Path, Map),
         Template = filename:join([root(), ".glodin", filename:basename(filename:dirname(Path)), "loader.erl"]),
         write(filename:join([root(), "src", str(maps:get(<<"module">>, Map)) ++ ".erl"]), read(Template))
-    end, Paths),
-    cleanup_generated(Paths).
+    end, Configs),
+    cleanup_generated([Path || {Path, _} <- Configs]).
 generate_module(Gen, Path, Map) ->
     Native = filename:dirname(Path),
     Args = [Native, root(), str(maps:get(<<"module">>, Map)),
             str(maps:get(<<"gleam_module">>, Map)), str(maps:get(<<"otp_app">>, Map))] ++
+           case maps:get(<<"target">>,Map,undefined) of undefined -> []; Target -> ["--target=" ++ str(Target)] end ++
            [str(K) ++ "=" ++ filename:absname(str(V), root()) || {K,V} <- maps:to_list(maps:get(<<"collections">>,Map,#{}))],
     Output = run(Gen, Args, root()),
     io:put_chars(Output),
@@ -364,13 +443,12 @@ generate_module(Gen, Path, Map) ->
     end.
 
 build() ->
-    Paths = modules(),
-    Gen = case lists:any(fun(P) -> not maps:get(<<"skip_compilation">>,config(P),false) end,Paths) of
+    Configs = module_configs(),
+    Gen = case lists:any(fun({_, M}) -> not maps:get(<<"skip_compilation">>,M,false) end,Configs) of
         true -> generator();
         false -> undefined
     end,
-    lists:foreach(fun(Path) ->
-        Map = config(Path),
+    lists:foreach(fun({Path, Map}) ->
         case maps:get(<<"skip_compilation">>,Map,false) of
             true ->
                 Binding = filename:join([root(),"src",str(maps:get(<<"gleam_module">>,Map)) ++ ".gleam"]),
@@ -381,8 +459,8 @@ build() ->
             false -> generate_module(Gen, Path, Map)
         end,
         build_module(Path, Map)
-    end, Paths),
-    cleanup_generated(Paths).
+    end, Configs),
+    cleanup_generated([Path || {Path, _} <- Configs]).
 
 cleanup_generated(Paths) ->
     Expected = lists:append([begin
@@ -401,8 +479,7 @@ cleanup_generated(Paths) ->
     end,
     lists:foreach(fun(P) ->
         Absolute = filename:absname(P, root()),
-        Prefix = filename:join(root(), "src") ++ "/",
-        case lists:prefix(Prefix, Absolute) andalso not lists:member(P, Expected) of
+        case inside(Absolute, filename:join(root(), "src")) andalso not lists:member(P, Expected) of
             true ->
                 case file:read_file(Absolute) of
                     {ok, <<"//// Generated by Glodin.", _/binary>>} -> file:delete(Absolute);
@@ -421,7 +498,8 @@ build_module(Path, Map) ->
     Module = str(maps:get(<<"module">>, Map)),
     Cache = filename:join([root(), ".glodin", Name]),
     ok = filelib:ensure_dir(filename:join(Cache, "_")),
-    Artifact = filename:join([root(), "priv", "native", Module ++ ".so"]),
+    Extension = library_extension(Map),
+    Artifact = filename:join([root(), "priv", "native", Module ++ Extension]),
     ok = filelib:ensure_dir(Artifact),
     case maps:get(<<"skip_compilation">>, Map, false) of
         true ->
@@ -451,7 +529,7 @@ build_module(Path, Map) ->
             Hash = ComputeHash(),
             Stamp = filename:join(Cache, "build_" ++ Mode ++ ".sha256"),
             Stem = Module ++ "_" ++ binary_to_list(Hash),
-            HashedArtifact = filename:join([root(), "priv", "native", Stem ++ ".so"]),
+            HashedArtifact = filename:join([root(), "priv", "native", Stem ++ Extension]),
             FinalHash = case {file:read_file(Stamp), filelib:is_file(HashedArtifact)} of
                 {{ok, Hash}, true} -> Hash;
                 _ ->
@@ -462,7 +540,7 @@ build_module(Path, Map) ->
                         "-I" ++ Include, "-I" ++ Cache, "-I" ++ filename:join(Toolkit, "c"),
                         "-o", Object, filename:join(Cache, "entry.c")] ++
                         [str(X) || X <- maps:get(<<"c_flags">>, Map, [])], root()),
-                    Temp = HashedArtifact ++ ".tmp.so",
+                    Temp = HashedArtifact ++ ".tmp" ++ Extension,
                     Optimize = case Mode of "prod" -> "-o:speed"; "release" -> "-o:speed"; _ -> "-debug" end,
                     LinkFlags = case os:type() of
                         {unix, darwin} -> ["-extra-linker-flags:-undefined dynamic_lookup"];
@@ -478,12 +556,19 @@ build_module(Path, Map) ->
                         [str(X) || X <- maps:get(<<"odin_flags">>, Map, [])],
                     run(Odin, Flags, root()),
                     BuiltHash = ComputeHash(),
-                    BuiltArtifact = filename:join([root(), "priv", "native", Module ++ "_" ++ binary_to_list(BuiltHash) ++ ".so"]),
+                    BuiltArtifact = filename:join([root(), "priv", "native", Module ++ "_" ++ binary_to_list(BuiltHash) ++ Extension]),
                     ok = file:rename(Temp, BuiltArtifact),
                     write(Stamp, BuiltHash),
                     BuiltHash
             end,
             finalize_loader(Cache, Module, Module ++ "_" ++ binary_to_list(FinalHash), FinalHash, Map)
+    end.
+
+library_extension(Map) ->
+    case maps:get(<<"target">>, Map, undefined) of
+        <<"windows_", _/binary>> -> ".dll";
+        undefined -> case os:type() of {win32,_} -> ".dll"; _ -> ".so" end;
+        _ -> ".so"
     end.
 
 dependency_files(Cache) ->

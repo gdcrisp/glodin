@@ -89,6 +89,11 @@ Resource_Codec :: struct {
 Codec :: union {
 	Value_Codec,
 	Resource_Codec,
+	Json_Codec,
+}
+
+Json_Codec :: struct {
+	type: string,
 }
 
 Import :: struct {

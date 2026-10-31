@@ -20,8 +20,7 @@ gleam_type :: proc(s: ^State, expr: ^ast.Expr, file: ^ast.File) -> string {
 
 resolve_gleam_type :: proc(s: ^State, expr: ^ast.Expr, file: ^ast.File) -> string {
 	text := source(file, expr)
-	switch x in expr.derived {
-	case ^ast.Ident:
+	if x, ok := expr.derived.(^ast.Ident); ok {
 		switch x.name {
 		case "i8", "i16", "i32", "i64", "i128", "int", "u8", "u16", "u32", "u64", "u128", "uint", "uintptr", "rune":
 			return "Int"
@@ -38,13 +37,13 @@ resolve_gleam_type :: proc(s: ^State, expr: ^ast.Expr, file: ^ast.File) -> strin
 			}
 			return declare_type(s, x.name, decl)
 		}
-	case ^ast.Array_Type:
+	} else if x, ok := expr.derived.(^ast.Array_Type); ok {
 		return fmt.aprintf("List(%s)", gleam_type(s, x.elem, file))
-	case ^ast.Dynamic_Array_Type:
+	} else if x, ok := expr.derived.(^ast.Dynamic_Array_Type); ok {
 		return fmt.aprintf("List(%s)", gleam_type(s, x.elem, file))
-	case ^ast.Map_Type:
+	} else if x, ok := expr.derived.(^ast.Map_Type); ok {
 		return fmt.aprintf("dict.Dict(%s, %s)", gleam_type(s, x.key, file), gleam_type(s, x.value, file))
-	case ^ast.Selector_Expr:
+	} else if x, ok := expr.derived.(^ast.Selector_Expr); ok {
 		name := x.field.name
 		if rel, ok := s.imports[ident(x.expr)]; ok && (rel == "glodin:glodin" || strings.has_suffix(rel, "/glodin")) {
 			switch name {
@@ -83,6 +82,9 @@ resolve_gleam_type :: proc(s: ^State, expr: ^ast.Expr, file: ^ast.File) -> strin
 			die(expr, "cannot parse imported type package")
 		}
 		for _, imported_file in pkg.files {
+			if !file_matches_target(imported_file, s.target) {
+				continue
+			}
 			for stmt in imported_file.decls {
 				decl, ok := stmt.derived.(^ast.Value_Decl)
 				if ok && len(decl.names) == 1 && ident(decl.names[0]) == name {
@@ -91,7 +93,7 @@ resolve_gleam_type :: proc(s: ^State, expr: ^ast.Expr, file: ^ast.File) -> strin
 			}
 		}
 		die(expr, "imported type not found")
-	case ^ast.Call_Expr:
+	} else if x, ok := expr.derived.(^ast.Call_Expr); ok {
 		selector, ok := x.expr.derived.(^ast.Selector_Expr)
 		if !ok {
 			die(
@@ -101,6 +103,15 @@ resolve_gleam_type :: proc(s: ^State, expr: ^ast.Expr, file: ^ast.File) -> strin
 		}
 		name := selector.field.name
 		switch name {
+		case "Json":
+			if len(x.args) != 1 {
+				die(expr, "Json requires one type argument")
+			}
+			if _, exists := s.types[text]; !exists {
+				s.types[text] = codegen.Type_Declaration{}
+				append(&s.codecs, codegen.Json_Codec{type = source(file, x.args[0])})
+			}
+			return "BitArray"
 		case "Result":
 			if len(x.args) != 2 {
 				die(expr, "Result requires two type arguments")
@@ -138,82 +149,10 @@ resolve_gleam_type :: proc(s: ^State, expr: ^ast.Expr, file: ^ast.File) -> strin
 		case:
 			die(expr, "unsupported generic native type")
 		}
-	case ^ast.Distinct_Type:
+	} else if x, ok := expr.derived.(^ast.Distinct_Type); ok {
 		return gleam_type(s, x.type, file)
-	case ^ast.Package,
-	     ^ast.File,
-	     ^ast.Comment_Group,
-	     ^ast.Bad_Expr,
-	     ^ast.Implicit,
-	     ^ast.Undef,
-	     ^ast.Basic_Lit,
-	     ^ast.Basic_Directive,
-	     ^ast.Ellipsis,
-	     ^ast.Proc_Lit,
-	     ^ast.Comp_Lit,
-	     ^ast.Tag_Expr,
-	     ^ast.Unary_Expr,
-	     ^ast.Binary_Expr,
-	     ^ast.Paren_Expr,
-	     ^ast.Implicit_Selector_Expr,
-	     ^ast.Selector_Call_Expr,
-	     ^ast.Index_Expr,
-	     ^ast.Deref_Expr,
-	     ^ast.Slice_Expr,
-	     ^ast.Matrix_Index_Expr,
-	     ^ast.Field_Value,
-	     ^ast.Ternary_If_Expr,
-	     ^ast.Ternary_When_Expr,
-	     ^ast.Or_Else_Expr,
-	     ^ast.Or_Return_Expr,
-	     ^ast.Or_Branch_Expr,
-	     ^ast.Type_Assertion,
-	     ^ast.Type_Cast,
-	     ^ast.Auto_Cast,
-	     ^ast.Inline_Asm_Expr,
-	     ^ast.Proc_Group,
-	     ^ast.Typeid_Type,
-	     ^ast.Helper_Type,
-	     ^ast.Poly_Type,
-	     ^ast.Proc_Type,
-	     ^ast.Pointer_Type,
-	     ^ast.Multi_Pointer_Type,
-	     ^ast.Fixed_Capacity_Dynamic_Array_Type,
-	     ^ast.Struct_Type,
-	     ^ast.Union_Type,
-	     ^ast.Enum_Type,
-	     ^ast.Bit_Set_Type,
-	     ^ast.Relative_Type,
-	     ^ast.Matrix_Type,
-	     ^ast.Bit_Field_Type,
-	     ^ast.Bad_Stmt,
-	     ^ast.Empty_Stmt,
-	     ^ast.Expr_Stmt,
-	     ^ast.Tag_Stmt,
-	     ^ast.Assign_Stmt,
-	     ^ast.Block_Stmt,
-	     ^ast.If_Stmt,
-	     ^ast.When_Stmt,
-	     ^ast.Return_Stmt,
-	     ^ast.Defer_Stmt,
-	     ^ast.For_Stmt,
-	     ^ast.Range_Stmt,
-	     ^ast.Inline_Range_Stmt,
-	     ^ast.Case_Clause,
-	     ^ast.Switch_Stmt,
-	     ^ast.Type_Switch_Stmt,
-	     ^ast.Branch_Stmt,
-	     ^ast.Using_Stmt,
-	     ^ast.Bad_Decl,
-	     ^ast.Value_Decl,
-	     ^ast.Package_Decl,
-	     ^ast.Import_Decl,
-	     ^ast.Foreign_Block_Decl,
-	     ^ast.Foreign_Import_Decl,
-	     ^ast.Attribute,
-	     ^ast.Field,
-	     ^ast.Field_List,
-	     ^ast.Bit_Field_Field:
+	} else {
+		// Unknown compiler AST nodes are rejected at this external syntax boundary.
 		die(expr, fmt.tprintf("unsupported native interface type: %s", text))
 	}
 	return ""
@@ -263,8 +202,7 @@ declare_type :: proc(s: ^State, name: string, declaration: Declaration) -> strin
 	type := codegen.Type_Declaration {
 		name = gleam_name,
 	}
-	switch x in expr.derived {
-	case ^ast.Struct_Type:
+	if x, ok := expr.derived.(^ast.Struct_Type); ok {
 		if mode == "map" || tag != "" && tag != snake(native_name) {
 			type.kind = .External
 			// Opaque Gleam declarations still require supported native fields.
@@ -282,7 +220,7 @@ declare_type :: proc(s: ^State, name: string, declaration: Declaration) -> strin
 			}
 			type.constructors = constructors
 		}
-	case ^ast.Enum_Type:
+	} else if x, ok := expr.derived.(^ast.Enum_Type); ok {
 		type.kind = .Custom
 		constructors := make([dynamic]codegen.Constructor)
 		for field in x.fields {
@@ -293,7 +231,7 @@ declare_type :: proc(s: ^State, name: string, declaration: Declaration) -> strin
 			append(&constructors, codegen.Constructor{name = gleam_type_name(field_name)})
 		}
 		type.constructors = constructors[:]
-	case ^ast.Union_Type:
+	} else if x, ok := expr.derived.(^ast.Union_Type); ok {
 		if mode == "untagged" {
 			type.kind = .External
 			for variant in x.variants {
@@ -322,84 +260,7 @@ declare_type :: proc(s: ^State, name: string, declaration: Declaration) -> strin
 			}
 			type.constructors = constructors[:]
 		}
-	case ^ast.Package,
-	     ^ast.File,
-	     ^ast.Comment_Group,
-	     ^ast.Bad_Expr,
-	     ^ast.Ident,
-	     ^ast.Implicit,
-	     ^ast.Undef,
-	     ^ast.Basic_Lit,
-	     ^ast.Basic_Directive,
-	     ^ast.Ellipsis,
-	     ^ast.Proc_Lit,
-	     ^ast.Comp_Lit,
-	     ^ast.Tag_Expr,
-	     ^ast.Unary_Expr,
-	     ^ast.Binary_Expr,
-	     ^ast.Paren_Expr,
-	     ^ast.Selector_Expr,
-	     ^ast.Implicit_Selector_Expr,
-	     ^ast.Selector_Call_Expr,
-	     ^ast.Index_Expr,
-	     ^ast.Deref_Expr,
-	     ^ast.Slice_Expr,
-	     ^ast.Matrix_Index_Expr,
-	     ^ast.Call_Expr,
-	     ^ast.Field_Value,
-	     ^ast.Ternary_If_Expr,
-	     ^ast.Ternary_When_Expr,
-	     ^ast.Or_Else_Expr,
-	     ^ast.Or_Return_Expr,
-	     ^ast.Or_Branch_Expr,
-	     ^ast.Type_Assertion,
-	     ^ast.Type_Cast,
-	     ^ast.Auto_Cast,
-	     ^ast.Inline_Asm_Expr,
-	     ^ast.Proc_Group,
-	     ^ast.Typeid_Type,
-	     ^ast.Helper_Type,
-	     ^ast.Distinct_Type,
-	     ^ast.Poly_Type,
-	     ^ast.Proc_Type,
-	     ^ast.Pointer_Type,
-	     ^ast.Multi_Pointer_Type,
-	     ^ast.Array_Type,
-	     ^ast.Dynamic_Array_Type,
-	     ^ast.Fixed_Capacity_Dynamic_Array_Type,
-	     ^ast.Bit_Set_Type,
-	     ^ast.Map_Type,
-	     ^ast.Relative_Type,
-	     ^ast.Matrix_Type,
-	     ^ast.Bit_Field_Type,
-	     ^ast.Bad_Stmt,
-	     ^ast.Empty_Stmt,
-	     ^ast.Expr_Stmt,
-	     ^ast.Tag_Stmt,
-	     ^ast.Assign_Stmt,
-	     ^ast.Block_Stmt,
-	     ^ast.If_Stmt,
-	     ^ast.When_Stmt,
-	     ^ast.Return_Stmt,
-	     ^ast.Defer_Stmt,
-	     ^ast.For_Stmt,
-	     ^ast.Range_Stmt,
-	     ^ast.Inline_Range_Stmt,
-	     ^ast.Case_Clause,
-	     ^ast.Switch_Stmt,
-	     ^ast.Type_Switch_Stmt,
-	     ^ast.Branch_Stmt,
-	     ^ast.Using_Stmt,
-	     ^ast.Bad_Decl,
-	     ^ast.Value_Decl,
-	     ^ast.Package_Decl,
-	     ^ast.Import_Decl,
-	     ^ast.Foreign_Block_Decl,
-	     ^ast.Foreign_Import_Decl,
-	     ^ast.Attribute,
-	     ^ast.Field,
-	     ^ast.Field_List,
-	     ^ast.Bit_Field_Field:
+	} else {
 		type.kind = .Alias
 		type.alias = gleam_type(s, expr, file)
 	}
